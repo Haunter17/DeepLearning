@@ -7,6 +7,7 @@ function [cost, grad, preds] = cnnCost(theta,images,labels,numClasses,...
 % Parameters:
 %  theta      -  unrolled parameter vector
 %  images     -  stores images in imageDim x imageDim x numImges
+% labels - m x 1 for desired outputs
 %                array
 %  numClasses -  number of classes to predict
 %  filterDim  -  dimension of convolutional filter                            
@@ -72,7 +73,27 @@ activations = zeros(convDim,convDim,numFilters,numImages);
 activationsPooled = zeros(outputDim,outputDim,numFilters,numImages);
 
 %%% YOUR CODE HERE %%%
-
+% convolution step
+for m = 1 : numImages
+    for k = 1: numFilters
+        filter = Wc(:, :, k);
+        filter = rot90(squeeze(filter), 2);
+        im = squeeze(images(:, :, m));
+        WX = conv2(im, filter, 'valid');
+        activations(:, :, k, m) = sigmoid(WX + bc(k));
+    end
+end
+% subsampling step
+for m = 1 : numImages
+    for k = 1: numFilters
+        filter = ones(poolDim, poolDim);
+        im = squeeze(activations(:, :, k, m));
+        WX = conv2(im, filter, 'valid') / (poolDim ^ 2);
+        pooledIm = WX(1:poolDim:end, 1:poolDim: end);
+        activationsPooled(:, :, k, m) = pooledIm;
+    end
+end
+        
 % Reshape activations into 2-d matrix, hiddenSize x numImages,
 % for Softmax layer
 activationsPooled = reshape(activationsPooled,[],numImages);
@@ -88,7 +109,8 @@ activationsPooled = reshape(activationsPooled,[],numImages);
 probs = zeros(numClasses,numImages);
 
 %%% YOUR CODE HERE %%%
-
+WdH = exp(Wd * activationsPooled + bd);
+probs = bsxfun(@rdivide, WdH, sum(WdH, 1));
 %%======================================================================
 %% STEP 1b: Calculate Cost
 %  In this step you will use the labels given as input and the probs
@@ -98,7 +120,9 @@ probs = zeros(numClasses,numImages);
 cost = 0; % save objective into cost
 
 %%% YOUR CODE HERE %%%
-
+I = sub2ind(size(probs), labels', 1:size(probs, 2));
+indicatorProb = probs(I);
+cost = -sum(log(indicatorProb)) / numImages;
 % Makes predictions given probs and returns without backproagating errors.
 if pred
     [~,preds] = max(probs,[],1);
@@ -118,7 +142,25 @@ end;
 %  quickly.
 
 %%% YOUR CODE HERE %%%
-
+% delta for output layer
+desired = zeros(size(probs));
+desired(I) = 1;
+delta_d = probs - desired;
+% propagate error through the pooling layer and conv layer
+% delta_pool = upsample(W' x delta_(l + 1)) x f'(z)
+deltaTemp = Wd' * delta_d;
+deltaTemp = reshape(deltaTemp, ...
+    outputDim, outputDim, numFilters, numImages);
+delta_pool = zeros(convDim, convDim, numFilters, numImages);
+for m = 1: numImages
+    for k = 1: numFilters
+        temp_delta_temp = deltaTemp(:, :, k, m);
+        delta_pool(:, :, k, m) = ...
+            (1 / poolDim^2) * kron(temp_delta_temp, ones(poolDim));
+    end
+end
+delta_conv = delta_pool ...
+    .* activations .* (ones(size(activations)) - activations);
 %%======================================================================
 %% STEP 1d: Gradient Calculation
 %  After backpropagating the errors above, we can use them to calculate the
@@ -128,7 +170,27 @@ end;
 %  for that filter with each image and aggregate over images.
 
 %%% YOUR CODE HERE %%%
+% compute gradient for softmax layer
+Wd_grad = delta_d * activationsPooled' ./ numImages;
+bd_grad = sum(delta_d, 2) ./ numImages;
 
+% compute gradient for convolution layer
+for k = 1:numFilters
+    accum = zeros(filterDim, filterDim);
+    for m = 1:numImages
+        im = squeeze(images(:, :, m));
+        filter = delta_conv(:, :, k, m);
+        filter = rot90(squeeze(filter), 2);
+        convE = conv2(im, filter, 'valid');
+        accum = accum + convE;
+    end
+    Wc_grad(:, :, k) = accum ./ numImages;
+    filterB = delta_conv(:, :, k, :);
+    bc_grad(k) = sum(filterB(:)) / numImages;
+end
+
+
+        
 %% Unroll gradient into grad vector for minFunc
 grad = [Wc_grad(:) ; Wd_grad(:) ; bc_grad(:) ; bd_grad(:)];
 
